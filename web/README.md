@@ -60,3 +60,17 @@ On a Windows PC, run this in PowerShell (use your server's address and page code
     irm "http://SERVER-IP/setup.ps1?code=PAGE-CODE" | iex
 
 The script comes from the server, so the token never has to be copied by hand. Anyone with the page code can fetch it, so keep the server on a trusted network.
+
+## Read-only data feeds (NAS, doors, calls, alerts)
+
+Put a JSON file at `/etc/deskhub-feeds.json` (or set `DESKHUB_FEEDS`) and restart the service. Each entry turns on one card:
+
+    {
+      "nas":    {"host": "10.0.0.9", "conf_dir": "/etc/deskhub-snmp"},
+      "doors":  {"url": "http://door-server/hub-feed", "token": "..."},
+      "calls":  {"url": "http://pbx/hub-feed", "token": "..."},
+      "jarvis": {"url": "http://jarvis/hub-feed", "token": "..."}
+    }
+
+- **NAS** (Synology): read with SNMP, which only reads. Install `snmp` on the server, enable SNMPv3 on the NAS, and put the user in `conf_dir/snmp.conf` (`defVersion 3`, `defSecurityLevel authPriv`, `defSecurityName`, `defAuthType SHA`, `defAuthPassphrase`, `defPrivType AES`, `defPrivPassphrase`).
+- **doors, calls, jarvis**: the server fetches the URL every 10 seconds with `Authorization: Bearer <token>`. The reply is JSON: `{"events": [{"t": epoch, "door", "who", "result": "granted|denied"}]}`, `{"calls": [{"t", "dir": "in|out|missed", "from", "to", "name", "secs"}]}` or `{"alerts": [{"t", "level": "info|warn|crit", "title", "detail", "resolved"}]}`. Only these fields are kept, trimmed to length.

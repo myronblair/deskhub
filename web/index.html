@@ -65,6 +65,13 @@ body.night{filter:brightness(.4)}
 .lab{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
 .lab>div{display:flex;align-items:center;gap:8px;font-size:14px}
 .lab i{width:10px;height:10px;border-radius:50%;background:var(--ok);flex:none}.lab i.dn{background:var(--bad)}
+.feed{display:flex;gap:10px;align-items:flex-start;margin:8px 0}
+.feed .t{width:58px;flex:none;color:var(--dim);font-size:13px}
+.feed .b{min-width:0;flex:1}
+.feed .s{font-size:12px;padding:1px 8px;border-radius:99px;background:#1d2736;color:var(--dim);flex:none}
+.feed .s.ok{background:#0f3a2d;color:var(--ok)}.feed .s.bad{background:#4a1b1b;color:var(--bad)}.feed .s.warn{background:#4a3a14;color:var(--warn)}
+.nasd{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.nasd span{font-size:12px;padding:2px 8px;border-radius:8px;background:#1d2736;color:var(--dim)}
+.nasd span.warn{color:var(--warn)}.nasd span.bad{color:var(--bad)}
 #tmr .big{font-variant-numeric:tabular-nums}
 #tmr.done .big{color:var(--warn);animation:bl 1s steps(2) infinite}@keyframes bl{50%{opacity:.25}}
 .pr{margin:8px 0 14px}.pr:last-child{margin-bottom:0}
@@ -99,6 +106,10 @@ body.night{filter:brightness(.4)}
   <section class="card hidden pc" id="c-gh"><h2>GitHub</h2><div id="gh"></div></section>
   <section class="card hidden" id="c-fc"><h2>Weather</h2><div id="fc"></div></section>
   <section class="card" id="c-tmr"><h2>Timer</h2><div id="tmr"></div></section>
+  <section class="card hidden" id="c-nas"><h2>NAS</h2><div id="nas"></div></section>
+  <section class="card hidden" id="c-doors"><h2>Door access</h2><div id="doors"></div></section>
+  <section class="card hidden" id="c-calls"><h2>Phone calls</h2><div id="calls"></div></section>
+  <section class="card hidden" id="c-jarvis"><h2>JARVIS</h2><div id="jarvis"></div></section>
   <section class="card hidden" id="c-lab"><h2>Lab status</h2><div id="lab" class="lab"></div></section>
   <section class="card hidden pc" id="c-tiles"><h2>Shortcuts</h2><div id="tiles" class="tiles"></div></section>
 </div>
@@ -365,6 +376,46 @@ tmrRender();
 function nightCheck() { const hr = new Date().getHours(); document.body.classList.toggle("night", hr >= 22 || hr < 6); }
 setInterval(nightCheck, 60000);
 nightCheck();
+function fmtUp(sec) { const d = Math.floor(sec / 86400), hr = Math.floor(sec % 86400 / 3600); return d ? d + "d " + hr + "h" : hr + "h " + Math.floor(sec % 3600 / 60) + "m"; }
+function renderNas() {
+  const n = S._nas;
+  if (!n) return show("c-nas", false);
+  show("c-nas", true);
+  if (n.offline) return put("nas", h("div", {class: "sm", style: "color:var(--bad)"}, "NAS not answering"));
+  const bad = !n.ok || (n.raids || []).some(r => r.state !== "ok" && r.state !== "scrubbing") || (n.disks || []).some(d => d.state === "bad");
+  const out = [h("div", {class: "row"}, h("span", {class: "big", style: "color:var(--" + (bad ? "bad" : "ok") + ")"}, bad ? "Check NAS" : "Healthy"),
+    h("span", {class: "dim sm"}, [n.temp !== null && n.temp !== undefined ? n.temp + "°C" : "", n.uptime ? "up " + fmtUp(n.uptime) : ""].filter(Boolean).join(" · ")))];
+  out.push(line("CPU", n.cpu, Math.round(n.cpu) + "%"));
+  if (n.mem !== null && n.mem !== undefined) out.push(line("Memory", n.mem, Math.round(n.mem) + "%"));
+  for (const v of n.volumes || []) out.push(line(v.name, v.pct, v.used_gb + " / " + v.size_gb + " GB", 80, 92));
+  out.push(h("div", {class: "nasd"}, (n.raids || []).map(r => h("span", {class: r.state === "ok" ? "" : "warn"}, r.name + " " + r.state)),
+    (n.disks || []).map(d => h("span", {class: d.state === "ok" ? "" : d.state}, d.name + (d.temp !== null && d.temp !== undefined ? " " + d.temp + "°" : "")))));
+  put("nas", out);
+}
+function ago(t) { const m = Math.max(0, Math.round((Date.now() / 1000 - t) / 60)); return m < 1 ? "now" : m < 60 ? m + "m" : m < 1440 ? Math.floor(m / 60) + "h" : Math.floor(m / 1440) + "d"; }
+function feedCard(kind, make, empty) {
+  const f = S["_" + kind];
+  if (!f) return show("c-" + kind, false);
+  show("c-" + kind, true);
+  if (f.offline) return put(kind, h("div", {class: "sm", style: "color:var(--bad)"}, "feed not answering"));
+  put(kind, f.items.length ? f.items.slice(0, 6).map(make) : h("div", {class: "dim"}, empty));
+}
+function renderDoors() {
+  feedCard("doors", e => h("div", {class: "feed"}, h("div", {class: "t"}, ago(e.t)),
+    h("div", {class: "b"}, h("div", {}, e.who || "Unknown card"), h("div", {class: "dim sm"}, e.door)),
+    h("span", {class: "s " + (e.result === "granted" ? "ok" : e.result === "denied" ? "bad" : "")}, e.result)), "No recent door events");
+}
+function renderCalls() {
+  const icon = {in: "↙", out: "↗", missed: "✕"};
+  feedCard("calls", c => h("div", {class: "feed"}, h("div", {class: "t"}, ago(c.t)),
+    h("div", {class: "b"}, h("div", {}, c.name || (c.dir === "out" ? c.to : c.from)), h("div", {class: "dim sm"}, (c.name ? (c.dir === "out" ? c.to : c.from) + " · " : "") + (c.secs ? mmss(c.secs) : ""))),
+    h("span", {class: "s " + (c.dir === "missed" ? "bad" : "")}, icon[c.dir] + " " + c.dir)), "No recent calls");
+}
+function renderJarvis() {
+  feedCard("jarvis", a => h("div", {class: "feed", style: a.resolved ? "opacity:.5" : ""}, h("div", {class: "t"}, ago(a.t)),
+    h("div", {class: "b"}, h("div", {}, a.title), a.detail ? h("div", {class: "dim sm"}, a.detail) : null),
+    h("span", {class: "s " + (a.level === "crit" ? "bad" : a.level === "warn" ? "warn" : "")}, a.resolved ? "resolved" : a.level)), "No alerts");
+}
 function renderStatus() {
   const b = $("badge");
   b.textContent = !ws || ws.readyState !== 1 ? "reconnecting…" : companion ? "PC connected" : "PC offline";
@@ -372,8 +423,8 @@ function renderStatus() {
   document.body.classList.toggle("stale", !companion || !!(S.pc_power && S.pc_power.asleep));
 }
 const RENDER = {ai: renderAi, claude: renderAi, stats: renderStats, media: renderMedia, events: renderEvents, printer: renderPrinters,
-  steam: renderSteam, net: renderNet, ai_accounts: renderAi, github: renderGh, _checks: renderLab, tiles: () => { renderTiles(); }, tile_state: renderTiles, alert: renderAlert, pc_power: renderStatus};
-function renderAll() { renderAi(); renderStats(); renderMedia(); renderEvents(); renderPrinters(); renderSteam(); renderNet(); renderTiles(); renderAlert(); renderGh(); renderLab(); renderStatus(); }
+  steam: renderSteam, net: renderNet, ai_accounts: renderAi, github: renderGh, _checks: renderLab, _nas: renderNas, _doors: renderDoors, _calls: renderCalls, _jarvis: renderJarvis, tiles: () => { renderTiles(); }, tile_state: renderTiles, alert: renderAlert, pc_power: renderStatus};
+function renderAll() { renderAi(); renderStats(); renderMedia(); renderEvents(); renderPrinters(); renderSteam(); renderNet(); renderTiles(); renderAlert(); renderGh(); renderLab(); renderNas(); renderDoors(); renderCalls(); renderJarvis(); renderStatus(); }
 
 // ---- connection --------------------------------------------------------------
 let opened = false, fails = 0;

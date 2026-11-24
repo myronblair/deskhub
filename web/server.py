@@ -13,6 +13,11 @@ Settings come from the environment:
     DESKHUB_BIND      default 0.0.0.0
     DESKHUB_PIN       optional short code for the web page (4+ characters), so nobody types the token
     DESKHUB_CONTROLS  1 (default) lets the page send commands; 0 makes it view-only
+    DESKHUB_FEEDS     path of a JSON file with read-only data feeds (default /etc/deskhub-feeds.json):
+                      {"nas": {"host": "10.0.0.9", "conf_dir": "/etc/deskhub-snmp"},
+                       "doors": {"url": "http://...", "token": "..."},
+                       "calls": {"url": "...", "token": "..."},
+                       "jarvis": {"url": "...", "token": "..."}}
     DESKHUB_CHECKS    hosts to watch, e.g. "Proxmox=10.0.0.5:8006,NAS=10.0.0.9:5001" (shown as Lab status)
     DESKHUB_LAT, DESKHUB_LON, DESKHUB_UNIT   weather place for the page (unit: f or c)
 """
@@ -24,10 +29,13 @@ import json
 import logging
 import os
 import pathlib
+import re
 import struct
 import sys
+import time
 import zlib
 
+import aiohttp
 from aiohttp import WSMsgType, web
 
 log = logging.getLogger("deskhub-web")
@@ -140,11 +148,94 @@ Write-Host "Started. The Hub should say PC connected in a few seconds."
 '''
 
 
+# ---------------------------------------------------------------- read-only feeds
+SNMP_ROOTS = ["1.3.6.1.4.1.6574", "1.3.6.1.4.1.2021.11", "1.3.6.1.4.1.2021.4", "1.3.6.1.2.1.25.2.3.1",
+              "1.3.6.1.2.1.25.1.1"]
+DISK_STATUS = {1: "ok", 2: "warn", 3: "warn", 4: "bad", 5: "bad"}
+RAID_STATUS = {1: "ok", 2: "repairing", 3: "migrating", 4: "expanding", 5: "deleting", 6: "creating",
+               7: "syncing", 8: "parity check", 9: "assembling", 10: "canceling", 11: "degraded",
+               12: "crashed", 13: "scrubbing"}
+
+
+def parse_snmp(text: str) -> dict[str, str]:
+    """{numeric oid: value} from `snmpwalk -Oqnt` output."""
+    out = {}
+    for line in text.splitlines():
+        m = re.match(r"^\.?(\d[\d.]*)\s+(.*)$", line.strip())
+        if m:
+            out[m.group(1)] = m.group(2).strip().strip('"')
+    return out
+
+
+def _int(v, default=None):
+    try:
+        return int(float(str(v).split()[0]))
+    except (ValueError, TypeError, IndexError):
+        return default
+
+
+def nas_message(v: dict[str, str]) -> dict:
+    """A Synology's SNMP values as the page's NAS card."""
+    def col(prefix: str) -> dict[str, str]:
+        n = len(prefix) + 1
+        return {k[n:]: val for k, val in v.items() if k.startswith(prefix + ".")}
+
+    syn = "1.3.6.1.4.1.6574"
+    cpu = (_int(v.get("1.3.6.1.4.1.2021.11.9.0"), 0) or 0) + (_int(v.get("1.3.6.1.4.1.2021.11.10.0"), 0) or 0)
+    total = _int(v.get("1.3.6.1.4.1.2021.4.5.0"), 0) or 0
+    free = sum(_int(v.get(f"1.3.6.1.4.1.2021.4.{i}.0"), 0) or 0 for i in (6, 14, 15))
+    names, units, sizes, used = (col(f"1.3.6.1.2.1.25.2.3.1.{i}") for i in (3, 4, 5, 6))
+    vols = []
+    for i, name in names.items():
+        if name.startswith("/volume"):
+            unit, size, use = _int(units.get(i), 0) or 0, _int(sizes.get(i), 0) or 0, _int(used.get(i), 0) or 0
+            if size > 0:
+                vols.append({"name": name.lstrip("/"), "pct": round(use / size * 100, 1),
+                             "size_gb": round(size * unit / 1e9), "used_gb": round(use * unit / 1e9)})
+    dn, dm, ds, dt = (col(f"{syn}.2.1.1.{i}") for i in (2, 3, 5, 6))
+    disks = [{"name": dn[i][:24], "model": dm.get(i, "")[:30], "state": DISK_STATUS.get(_int(ds.get(i), 1), "ok"),
+              "temp": _int(dt.get(i))} for i in sorted(dn, key=lambda x: _int(x, 0))]
+    rn, rs = col(f"{syn}.3.1.1.2"), col(f"{syn}.3.1.1.3")
+    raids = [{"name": rn[i][:24], "state": RAID_STATUS.get(_int(rs.get(i), 1), "unknown")}
+             for i in sorted(rn, key=lambda x: _int(x, 0))]
+    up = _int(v.get("1.3.6.1.2.1.25.1.1.0"))
+    return {"type": "_nas", "ok": _int(v.get(f"{syn}.1.1.0"), 1) == 1, "temp": _int(v.get(f"{syn}.1.2.0")),
+            "cpu": min(100, cpu), "mem": round((1 - free / total) * 100, 1) if total else None,
+            "uptime": up // 100 if up is not None else None, "volumes": vols, "disks": disks, "raids": raids}
+
+
+def _s(v, n):
+    return str(v if v is not None else "")[:n]
+
+
+def clean_feed(kind: str, data: dict) -> dict:
+    """The page's message for a doors, calls or jarvis feed. Only the expected fields are kept."""
+    rows = data.get({"doors": "events", "calls": "calls", "jarvis": "alerts"}[kind]) or []
+    out = []
+    for r in rows[:10] if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        t = _int(r.get("t"), 0)
+        if kind == "doors":
+            res = r.get("result") if r.get("result") in ("granted", "denied") else "other"
+            out.append({"t": t, "door": _s(r.get("door"), 40), "who": _s(r.get("who"), 60), "result": res})
+        elif kind == "calls":
+            d = r.get("dir") if r.get("dir") in ("in", "out", "missed") else "in"
+            out.append({"t": t, "dir": d, "from": _s(r.get("from"), 40), "to": _s(r.get("to"), 40),
+                        "name": _s(r.get("name"), 60), "secs": _int(r.get("secs"), 0)})
+        else:
+            lv = r.get("level") if r.get("level") in ("info", "warn", "crit") else "info"
+            out.append({"t": t, "level": lv, "title": _s(r.get("title"), 90), "detail": _s(r.get("detail"), 160),
+                        "resolved": bool(r.get("resolved"))})
+    return {"type": "_" + kind, "items": out}
+
+
 class Board:
     def __init__(self, token: str, controls: bool, pin: str = "", place: dict | None = None,
                  checks: list | None = None):
         self.checks = checks or []          # [(name, host, port)]
-        self.checks_msg = ""
+        self.extra: dict[str, str] = {}      # latest feed messages (lab checks, NAS, doors...)
+        self.feeds: dict = {}
         self.token = token
         self.pin = pin
         self.controls = controls
@@ -224,7 +315,7 @@ class Board:
         self.viewers.add(ws)
         try:
             await ws.send_str(self.status())
-            for text in ([self.checks_msg] if self.checks_msg else []) + list(self.latest.values()) + list(self.art.values()):
+            for text in list(self.extra.values()) + list(self.latest.values()) + list(self.art.values()):
                 await ws.send_str(text)
             async for msg in ws:
                 if msg.type != WSMsgType.TEXT or not self.controls or self.companion is None:
@@ -252,17 +343,64 @@ class Board:
     async def check_loop(self):
         while True:
             results = await asyncio.gather(*(self.probe(*c) for c in self.checks))
-            self.checks_msg = json.dumps({"type": "_checks", "items": results}, separators=(",", ":"))
-            await self.broadcast(self.checks_msg)
+            await self.publish({"type": "_checks", "items": results})
             await asyncio.sleep(30)
 
+    async def publish(self, msg: dict):
+        text = json.dumps(msg, separators=(",", ":"))
+        self.extra[msg["type"]] = text
+        await self.broadcast(text)
+
+    async def snmp_walk(self, conf_dir: str, host: str, root: str) -> str:
+        env = {**os.environ, "SNMPCONFPATH": conf_dir, "MIBS": ""}
+        proc = await asyncio.create_subprocess_exec("snmpwalk", "-Oqnt", "-t", "3", "-r", "1", host, root,
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env)
+        out, _ = await asyncio.wait_for(proc.communicate(), 20)
+        return out.decode("utf-8", "replace")
+
+    async def nas_loop(self, cfg: dict):
+        host, conf = str(cfg["host"]), str(cfg.get("conf_dir", "/etc/deskhub-snmp"))
+        while True:
+            try:
+                vals: dict[str, str] = {}
+                for root in SNMP_ROOTS:
+                    vals.update(parse_snmp(await self.snmp_walk(conf, host, root)))
+                if not vals:
+                    raise RuntimeError("no SNMP answer")
+                await self.publish(nas_message(vals))
+            except (OSError, RuntimeError, asyncio.TimeoutError) as e:
+                log.warning("NAS feed: %s", e)
+                await self.publish({"type": "_nas", "offline": True})
+            await asyncio.sleep(30)
+
+    async def http_feed_loop(self, kind: str, cfg: dict):
+        headers = {"Authorization": "Bearer " + str(cfg.get("token", ""))}
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            while True:
+                try:
+                    async with sess.get(str(cfg["url"]), headers=headers) as r:
+                        r.raise_for_status()
+                        await self.publish(clean_feed(kind, await r.json(content_type=None)))
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError) as e:
+                    log.warning("%s feed: %s", kind, e)
+                    await self.publish({"type": "_" + kind, "offline": True})
+                await asyncio.sleep(10)
+
     async def start_checks(self, app):
+        tasks = []
         if self.checks:
-            app["checks"] = asyncio.create_task(self.check_loop())
+            tasks.append(asyncio.create_task(self.check_loop()))
+        if self.feeds.get("nas"):
+            tasks.append(asyncio.create_task(self.nas_loop(self.feeds["nas"])))
+        for kind in ("doors", "calls", "jarvis"):
+            if self.feeds.get(kind):
+                tasks.append(asyncio.create_task(self.http_feed_loop(kind, self.feeds[kind])))
+        app["feed_tasks"] = tasks
 
     async def stop_checks(self, app):
-        if "checks" in app:
-            app["checks"].cancel()
+        for t in app.get("feed_tasks", []):
+            t.cancel()
 
     async def setup_script(self, request: web.Request):
         """A PowerShell script that sets up the companion on a PC, with this hub's address and token."""
@@ -304,6 +442,12 @@ def main():
         except ValueError:
             sys.exit(f"DESKHUB_CHECKS: '{item}' should look like Name=host:port")
     board = Board(token, os.environ.get("DESKHUB_CONTROLS", "1") != "0", pin, place, checks)
+    feeds_path = pathlib.Path(os.environ.get("DESKHUB_FEEDS", "/etc/deskhub-feeds.json"))
+    if feeds_path.is_file():
+        try:
+            board.feeds = json.loads(feeds_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            sys.exit(f"{feeds_path}: {e}")
     app = web.Application()
     app.on_startup.append(board.start_checks)
     app.on_cleanup.append(board.stop_checks)
