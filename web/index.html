@@ -473,7 +473,7 @@ function renderHa() {
   const tg = f.items.filter(i => i.kind === "toggle"), se = f.items.filter(i => i.kind === "sensor");
   const out = [];
   $("c-ha").classList.toggle("wide", tg.length > 8);
-  if (tg.length) out.push(h("div", {class: "hatiles"}, tg.map(i => h("button", {class: i.state === "on" ? "on" : "", disabled: !controls || null,
+  if (tg.length) out.push(h("div", {class: "hatiles"}, tg.map(i => h("button", {class: i.state === "on" ? "on" : "", disabled: !controls || i.state === "unavailable" || i.state === "unknown" || null,
     onclick: () => send({type: "ha_toggle", id: i.id})}, i.name.replace(/ (Floodlight|Lights?)$/i, ""), h("span", {class: "st"}, i.state === "on" ? "on" : i.state === "off" ? "off" : i.state)))));
   if (se.length) out.push(h("div", {class: "hasens"}, se.map(i => {
     const open = i.state === "on", label = i.dc === "window" || i.dc === "door" || i.dc === "garage_door" ? (open ? "Open" : "Closed") : i.state;
