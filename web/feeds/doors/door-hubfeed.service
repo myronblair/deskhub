@@ -1,0 +1,24 @@
+[Unit]
+Description=Read-only door events feed for The Hub
+After=network-online.target
+
+[Service]
+User=uhppoted
+ExecStart=/usr/bin/python3 /opt/hubfeed/doorfeed.py
+Restart=always
+RestartSec=3
+# Read-only by construction: the whole file system is read-only to this service.
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/portcullis /var/uhppoted
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryMax=96M
+
+[Install]
+WantedBy=multi-user.target
