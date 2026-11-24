@@ -83,6 +83,63 @@ def art_message(frame: bytes) -> tuple[str, str] | None:
         return None
 
 
+SETUP_PS1 = r'''# Set up the companion on this PC and connect it to The Hub. Safe to run again.
+$ErrorActionPreference = "Stop"
+$dir = Join-Path $env:USERPROFILE "deskhub"
+$comp = Join-Path $dir "companion"
+
+# 1. uv (runs the companion and installs what it needs)
+$uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
+if (-not $uv) {
+    Write-Host "Installing uv..."
+    Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
+    $uv = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
+}
+
+# 2. The companion code (public, no git needed). Your config.toml is kept.
+Write-Host "Downloading the companion..."
+$zip = Join-Path $env:TEMP "deskhub.zip"
+$tmp = Join-Path $env:TEMP "deskhub-extract"
+Invoke-WebRequest "https://github.com/myronblair/deskhub/archive/refs/heads/main.zip" -OutFile $zip
+if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+Expand-Archive $zip -DestinationPath $tmp
+New-Item -ItemType Directory -Force $dir | Out-Null
+Copy-Item (Join-Path $tmp "deskhub-main\*") $dir -Recurse -Force
+Remove-Item $tmp -Recurse -Force; Remove-Item $zip -Force
+
+# 3. Settings: where The Hub is. Written once; edit config.toml later to add more.
+$cfg = Join-Path $comp "config.toml"
+if (-not (Test-Path $cfg)) {
+    $text = @"
+[hub]
+host = "__HOST__"
+token = "__TOKEN__"
+
+[calendar]
+days = 7
+
+[claude]
+live_limits = false
+alerts = true
+idle_alert_seconds = 30
+"@
+    [IO.File]::WriteAllText($cfg, $text, (New-Object Text.UTF8Encoding $false))
+    Write-Host "Wrote $cfg"
+} else {
+    Write-Host "Kept your existing $cfg (check its [hub] host and token)"
+}
+
+# 4. Install and start (hidden, with an icon in the notification area)
+Write-Host "Installing the companion's parts (the first time takes a minute or two)..."
+Push-Location $comp
+& $uv sync
+Get-CimInstance Win32_Process -Filter "Name like 'python%'" | Where-Object { $_.CommandLine -like "*-m deskhub*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+Start-Process -FilePath $uv -ArgumentList "run", "python", "-m", "deskhub", "--tray" -WorkingDirectory $comp -WindowStyle Hidden
+Pop-Location
+Write-Host "Started. The Hub should say PC connected in a few seconds."
+'''
+
+
 class Board:
     def __init__(self, token: str, controls: bool, pin: str = "", place: dict | None = None,
                  checks: list | None = None):
@@ -207,6 +264,14 @@ class Board:
         if "checks" in app:
             app["checks"].cancel()
 
+    async def setup_script(self, request: web.Request):
+        """A PowerShell script that sets up the companion on a PC, with this hub's address and token."""
+        if not self.ok_view(request.query.get("code", "")):
+            raise web.HTTPUnauthorized(text="bad code")
+        text = (SETUP_PS1.replace("__HOST__", request.host.split(":")[0] if request.host else "")
+                .replace("__TOKEN__", self.token))
+        return web.Response(text=text, content_type="text/plain", headers={"Cache-Control": "no-store"})
+
     async def page(self, request: web.Request):
         return web.FileResponse(HERE / "index.html", headers={"Cache-Control": "no-cache"})
 
@@ -243,7 +308,8 @@ def main():
     app.on_startup.append(board.start_checks)
     app.on_cleanup.append(board.stop_checks)
     app.add_routes([web.get("/", board.page), web.get("/ws", board.companion_ws),
-                    web.get("/view", board.viewer_ws), web.get("/healthz", board.health)])
+                    web.get("/view", board.viewer_ws), web.get("/healthz", board.health),
+                    web.get("/setup.ps1", board.setup_script)])
     web.run_app(app, host=os.environ.get("DESKHUB_BIND", "0.0.0.0"),
                 port=int(os.environ.get("DESKHUB_PORT", "80")), print=None)
 

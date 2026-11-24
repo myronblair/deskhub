@@ -52,3 +52,11 @@ To show two Claude accounts side by side, give each its own Claude Code config f
     config_dir = "~/.claude-work"
 
 Sign the second login in once: set `CLAUDE_CONFIG_DIR` to its folder, run `claude`, then `/login`. Keep the `[[claude.accounts]]` blocks last in the `[claude]` section. Limits for any login other than `~/.claude` need `live_limits = true`; token counts work either way. The ESP32 board shows the first login.
+
+## Set up a PC with one line
+
+On a Windows PC, run this in PowerShell (use your server's address and page code). It downloads the companion, installs what it needs, writes `config.toml` with the right token and starts it:
+
+    irm "http://SERVER-IP/setup.ps1?code=PAGE-CODE" | iex
+
+The script comes from the server, so the token never has to be copied by hand. Anyone with the page code can fetch it, so keep the server on a trusted network.
