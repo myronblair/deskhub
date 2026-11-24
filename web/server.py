@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Desk Hub web board: a virtual hub for browsers and tablets.
+"""The Hub: a virtual hub for browsers and tablets.
 
 The Windows companion connects here exactly as it connects to the ESP32 board
 (set `host` in its [hub] section to this machine). This server remembers the

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the Desk Hub web board on Debian or Ubuntu. Run as root from this folder.
+# Install the The Hub web board on Debian or Ubuntu. Run as root from this folder.
 set -e
 apt-get update -qq
 apt-get install -y -qq python3-aiohttp

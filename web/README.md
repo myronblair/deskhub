@@ -1,6 +1,6 @@
-# Desk Hub web board
+# The Hub (web board)
 
-A browser version of the Desk Hub display, for a tablet (a Fire tablet in Fully Kiosk, for example) or any screen.
+A browser version of the Desk Hub display, called The Hub here, for a tablet (a Fire tablet in Fully Kiosk, for example) or any screen.
 
 The Windows companion keeps collecting the data. It connects to this server the same way it connects to the ESP32 board, and the server shows everything on a web page. Taps on the page (media, shortcuts, Steam, alerts, speed test) go back to the companion.
 
