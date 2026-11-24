@@ -133,6 +133,16 @@ live_limits = false
 alerts = true
 # A session that finished its turn alerts once it has waited this many seconds.
 idle_alert_seconds = 30
+# Two or more Claude logins (for example personal and work) can show side by side on
+# the web board. Each login is a Claude Code config folder. Sign the second one in with
+# CLAUDE_CONFIG_DIR set to its folder, then run `claude` and /login. Limits for any login
+# other than ~/.claude need live_limits = true above. Keep these blocks last in [claude].
+# [[claude.accounts]]
+# name = "Personal"
+# config_dir = "~/.claude"
+# [[claude.accounts]]
+# name = "Work"
+# config_dir = "~/.claude-work"
 
 # Shortcut tiles, in order. Up to 16. Pick 2/4/6/8/12/16 for an even grid.
 #

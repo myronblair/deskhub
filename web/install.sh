@@ -14,4 +14,5 @@ fi
 install -m 644 deskhub-web.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now deskhub-web
-echo "Token: $(sed -n 's/^DESKHUB_TOKEN=//p' /etc/deskhub-web.env)"
+echo "Companion token: $(sed -n 's/^DESKHUB_TOKEN=//p' /etc/deskhub-web.env)"
+echo "Page code:       $(sed -n 's/^DESKHUB_PIN=//p' /etc/deskhub-web.env)"

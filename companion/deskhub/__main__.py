@@ -20,6 +20,7 @@ from . import audio_state
 from .calendar_feed import fetch_events
 from .claude_alerts import ClaudeAlerts
 from .claude_usage import ClaudeUsage
+from .claude_live import find_claude, renew_signin
 from .codex_usage import CodexUsage, codex_home
 from .media import Media
 from .netstats import NetStats
@@ -127,6 +128,10 @@ class Companion:
             log.warning("[ai] agent = %r is not auto, claude or codex; using auto", self.agent)
             self.agent = "auto"
         self.claude = ClaudeUsage(live=live) if self.agent != "codex" else None
+        self.accounts = self.load_accounts(cfg, live is not None)
+        if self.accounts and self.agent != "codex":
+            self.claude = self.accounts[0][1]  # the board's AI page shows the first login
+        self.accounts_msg = None
         self.codex = CodexUsage() if self.agent == "codex" or (
             self.agent == "auto" and codex_home().is_dir()) else None
         self.claude_msg = None
@@ -168,6 +173,33 @@ class Companion:
         self.loop = None
         self.pc_asleep = False
         self.power = PowerWatch(self.on_pc_power) if pc_sleep_mode(cfg) != "none" else None
+
+    @staticmethod
+    def load_accounts(cfg: dict, live_on: bool) -> list:
+        """[(name, ClaudeUsage)] for each `[[claude.accounts]]`, or [] with fewer than two.
+        Each account is one Claude Code config folder (what CLAUDE_CONFIG_DIR points at)."""
+        entries = cfg.get("claude", {}).get("accounts", [])
+        if len(entries) < 2:
+            if entries:
+                log.info("[[claude.accounts]]: one login is the default; add a second to show both")
+            return []
+        default = (pathlib.Path.home() / ".claude").resolve()
+        out = []
+        for i, e in enumerate(entries[:4]):
+            d = pathlib.Path(str(e.get("config_dir", "~/.claude"))).expanduser()
+            name = str(e.get("name") or f"Login {i + 1}")[:24]
+            is_default = d.resolve() == default
+            live = None
+            if live_on:
+                from .claude_live import LiveLimits
+
+                live = LiveLimits(d / ".credentials.json",
+                                  renew=lambda d=d: renew_signin(find_claude(), None if is_default else d))
+            elif not is_default:
+                log.info("account %r: limits need [claude] live_limits = true (only token counts show)", name)
+            out.append((name, ClaudeUsage(root=d / "projects", live=live, bridge=is_default)))
+            log.info("Claude login %r: %s", name, d)
+        return out
 
     def on_pc_power(self, asleep: bool):
         """From the power-watch thread: tell the board the PC's display slept or woke."""
@@ -238,11 +270,18 @@ class Companion:
             self.lit_msg = msg
             await self.send(msg)
 
+    def accounts_snapshot(self) -> dict:
+        return {"type": "ai_accounts",
+                "accounts": [{"name": n, **u.snapshot(), "type": "ai"} for n, u in self.accounts]}
+
     async def claude_loop(self):
         while True:
             try:
                 self.claude_msg = await asyncio.to_thread(self.ai_snapshot)
                 await self.send(self.claude_msg)
+                if self.accounts:
+                    self.accounts_msg = await asyncio.to_thread(self.accounts_snapshot)
+                    await self.send(self.accounts_msg)
             except Exception as e:
                 log.warning("AI usage failed: %s", e)
             await asyncio.sleep(5)
@@ -407,6 +446,8 @@ class Companion:
             await self.send(self.events_message())
             if self.claude_msg:
                 await self.send(self.claude_msg)
+            if self.accounts_msg:
+                await self.send(self.accounts_msg)
             if self.alerts and self.alerts.msg:
                 await self.send(self.alerts.msg)
             if self.printer_msg:

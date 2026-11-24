@@ -22,6 +22,33 @@ Restart the companion. The page shows "PC connected". (The companion talks to on
 
 ## Open the page
 
-    http://SERVER-IP/?token=THE-TOKEN
+Go to `http://SERVER-IP/` and type the short page code (`DESKHUB_PIN` in `/etc/deskhub-web.env`, printed by the installer). The page remembers it on that device, so you only type it once.
 
-Add `&lat=..&lon=..` for weather (and `&unit=c` for Celsius).
+For weather, set `DESKHUB_LAT`, `DESKHUB_LON` and optionally `DESKHUB_UNIT=c` in the same file, then `sudo systemctl restart deskhub-web`.
+
+## More options
+
+All of these go in `/etc/deskhub-web.env`, then `sudo systemctl restart deskhub-web`.
+
+- `DESKHUB_CHECKS="pve1=10.0.0.5:8006,NAS=10.0.0.9:5001"`: hosts to watch. They show as Lab status and keep working when the PC is off.
+- `DESKHUB_LAT`, `DESKHUB_LON`, `DESKHUB_UNIT`: weather place (the forecast card and header).
+- `DESKHUB_CONTROLS=0`: view-only page.
+
+The page also has a timer, a GitHub chart (when the companion has a GitHub token), and dims itself from 10 pm to 6 am.
+
+## Two Claude logins
+
+To show two Claude accounts side by side, give each its own Claude Code config folder and list them in the companion's `config.toml`:
+
+    [claude]
+    live_limits = true
+
+    [[claude.accounts]]
+    name = "Personal"
+    config_dir = "~/.claude"
+
+    [[claude.accounts]]
+    name = "Work"
+    config_dir = "~/.claude-work"
+
+Sign the second login in once: set `CLAUDE_CONFIG_DIR` to its folder, run `claude`, then `/login`. Keep the `[[claude.accounts]]` blocks last in the `[claude]` section. Limits for any login other than `~/.claude` need `live_limits = true`; token counts work either way. The ESP32 board shows the first login.

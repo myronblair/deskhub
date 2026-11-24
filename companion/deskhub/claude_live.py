@@ -18,6 +18,7 @@ percentages, the same lookup Claude's own apps use to draw their usage bars.
 import datetime as dt
 import json
 import logging
+import os
 import pathlib
 import shutil
 import subprocess
@@ -45,14 +46,15 @@ def find_claude() -> str | None:
     return None
 
 
-def renew_signin(claude: str | None) -> bool:
+def renew_signin(claude: str | None, config_dir: pathlib.Path | None = None) -> bool:
     """Ask Claude Code to renew its sign-in. `claude auth status` refreshes an
     expired token and writes it back to the credentials file itself; it sends no
     message to Claude. Its output (which names the account) is discarded."""
     if not claude:
         return False
     try:
-        r = subprocess.run([claude, "auth", "status"], capture_output=True, timeout=60,
+        env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None
+        r = subprocess.run([claude, "auth", "status"], capture_output=True, timeout=60, env=env,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0)
     except (OSError, subprocess.SubprocessError):
         return False

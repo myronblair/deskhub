@@ -11,7 +11,10 @@ Settings come from the environment:
     DESKHUB_TOKEN     required, the companion token (also used by the web page)
     DESKHUB_PORT      default 80
     DESKHUB_BIND      default 0.0.0.0
+    DESKHUB_PIN       optional short code for the web page (4+ characters), so nobody types the token
     DESKHUB_CONTROLS  1 (default) lets the page send commands; 0 makes it view-only
+    DESKHUB_CHECKS    hosts to watch, e.g. "Proxmox=10.0.0.5:8006,NAS=10.0.0.9:5001" (shown as Lab status)
+    DESKHUB_LAT, DESKHUB_LON, DESKHUB_UNIT   weather place for the page (unit: f or c)
 """
 import array
 import asyncio
@@ -81,9 +84,14 @@ def art_message(frame: bytes) -> tuple[str, str] | None:
 
 
 class Board:
-    def __init__(self, token: str, controls: bool):
+    def __init__(self, token: str, controls: bool, pin: str = "", place: dict | None = None,
+                 checks: list | None = None):
+        self.checks = checks or []          # [(name, host, port)]
+        self.checks_msg = ""
         self.token = token
+        self.pin = pin
         self.controls = controls
+        self.place = place or {}
         self.latest: dict[str, str] = {}
         self.art: dict[str, str] = {}
         self.viewers: set[web.WebSocketResponse] = set()
@@ -92,9 +100,12 @@ class Board:
     def ok(self, given: str) -> bool:
         return hmac.compare_digest(given.encode(), self.token.encode())
 
+    def ok_view(self, given: str) -> bool:
+        return self.ok(given) or bool(self.pin and hmac.compare_digest(given.encode(), self.pin.encode()))
+
     def status(self) -> str:
         return json.dumps({"type": "_status", "companion": self.companion is not None,
-                           "controls": self.controls})
+                           "controls": self.controls, **self.place})
 
     async def broadcast(self, text: str):
         for v in list(self.viewers):
@@ -149,14 +160,14 @@ class Board:
         return ws
 
     async def viewer_ws(self, request: web.Request):
-        if not self.ok(request.query.get("token", "")):
+        if not self.ok_view(request.query.get("token", "")):
             raise web.HTTPUnauthorized(text="bad token")
         ws = web.WebSocketResponse(heartbeat=15, max_msg_size=2**16)
         await ws.prepare(request)
         self.viewers.add(ws)
         try:
             await ws.send_str(self.status())
-            for text in list(self.latest.values()) + list(self.art.values()):
+            for text in ([self.checks_msg] if self.checks_msg else []) + list(self.latest.values()) + list(self.art.values()):
                 await ws.send_str(text)
             async for msg in ws:
                 if msg.type != WSMsgType.TEXT or not self.controls or self.companion is None:
@@ -171,6 +182,31 @@ class Board:
             self.viewers.discard(ws)
         return ws
 
+    async def probe(self, name: str, host: str, port: int) -> dict:
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        try:
+            _, w = await asyncio.wait_for(asyncio.open_connection(host, port), 2.5)
+            w.close()
+            return {"name": name, "up": True, "ms": round((loop.time() - t0) * 1000)}
+        except (OSError, asyncio.TimeoutError):
+            return {"name": name, "up": False}
+
+    async def check_loop(self):
+        while True:
+            results = await asyncio.gather(*(self.probe(*c) for c in self.checks))
+            self.checks_msg = json.dumps({"type": "_checks", "items": results}, separators=(",", ":"))
+            await self.broadcast(self.checks_msg)
+            await asyncio.sleep(30)
+
+    async def start_checks(self, app):
+        if self.checks:
+            app["checks"] = asyncio.create_task(self.check_loop())
+
+    async def stop_checks(self, app):
+        if "checks" in app:
+            app["checks"].cancel()
+
     async def page(self, request: web.Request):
         return web.FileResponse(HERE / "index.html", headers={"Cache-Control": "no-cache"})
 
@@ -184,8 +220,28 @@ def main():
     token = os.environ.get("DESKHUB_TOKEN", "")
     if len(token) < 8:
         sys.exit("Set DESKHUB_TOKEN (at least 8 characters).")
-    board = Board(token, os.environ.get("DESKHUB_CONTROLS", "1") != "0")
+    pin = os.environ.get("DESKHUB_PIN", "")
+    if pin and len(pin) < 4:
+        sys.exit("DESKHUB_PIN must be at least 4 characters.")
+    place = {}
+    if os.environ.get("DESKHUB_LAT") and os.environ.get("DESKHUB_LON"):
+        try:
+            place = {"lat": float(os.environ["DESKHUB_LAT"]), "lon": float(os.environ["DESKHUB_LON"]),
+                     "unit": "c" if os.environ.get("DESKHUB_UNIT", "f").lower() == "c" else "f"}
+        except ValueError:
+            sys.exit("DESKHUB_LAT and DESKHUB_LON must be numbers.")
+    checks = []
+    for item in filter(None, (c.strip() for c in os.environ.get("DESKHUB_CHECKS", "").split(","))):
+        try:
+            name, addr = item.split("=", 1)
+            host, port = addr.rsplit(":", 1)
+            checks.append((name.strip(), host.strip(), int(port)))
+        except ValueError:
+            sys.exit(f"DESKHUB_CHECKS: '{item}' should look like Name=host:port")
+    board = Board(token, os.environ.get("DESKHUB_CONTROLS", "1") != "0", pin, place, checks)
     app = web.Application()
+    app.on_startup.append(board.start_checks)
+    app.on_cleanup.append(board.stop_checks)
     app.add_routes([web.get("/", board.page), web.get("/ws", board.companion_ws),
                     web.get("/view", board.viewer_ws), web.get("/healthz", board.health)])
     web.run_app(app, host=os.environ.get("DESKHUB_BIND", "0.0.0.0"),

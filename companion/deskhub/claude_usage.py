@@ -50,8 +50,9 @@ def _model_family(model: str) -> str:
 
 
 class ClaudeUsage:
-    def __init__(self, root: pathlib.Path | None = None, live=None):
+    def __init__(self, root: pathlib.Path | None = None, live=None, bridge: bool = True):
         self.live = live  # optional claude_live.LiveLimits
+        self.bridge = bridge  # read the status-line file; only right for the default login
         self.root = root or pathlib.Path.home() / ".claude" / "projects"
         self._offsets: dict[pathlib.Path, int] = {}
         self._seen: set[str] = set()
@@ -127,7 +128,7 @@ class ClaudeUsage:
 
     def _limits(self, last_active) -> dict:
         """Status line readings, or live ones when enabled and newer."""
-        limits = read_limits()
+        limits = read_limits() if self.bridge else {}
         if self.live is not None:
             recent = (last_active is not None and
                       dt.datetime.now(dt.timezone.utc) - last_active < dt.timedelta(minutes=15))

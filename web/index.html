@@ -46,13 +46,27 @@ button.on{background:var(--acc);color:#04251f;border-color:var(--acc)}
 .spark{display:flex;align-items:flex-end;gap:1px;height:36px;margin-top:6px}
 .spark i{flex:1;background:var(--acc);min-height:2px;border-radius:1px}
 .spark i.x{background:var(--bad)}
+.card.wide{grid-column:span 2}
+.accts{display:flex;gap:24px;flex-wrap:wrap}.accts .acct{flex:1;min-width:240px}
+@media(max-width:700px){.card.wide{grid-column:auto}}
 .days{display:flex;align-items:flex-end;gap:6px;height:54px;margin-top:10px}
 .days i{flex:1;background:var(--acc);border-radius:3px 3px 0 0;min-height:2px;opacity:.85}
 #alert{display:none;margin-bottom:12px;padding:14px 16px;border-radius:14px;background:#3a2a0d;border:1px solid var(--warn)}
 #alert b{color:var(--warn)}
 #alert .ctl{margin-top:8px}
 .hidden{display:none!important}
-body.stale #grid{opacity:.35}
+body.stale .pc{opacity:.35}
+body.night{filter:brightness(.4)}
+.gh{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,1fr);gap:2px;margin:8px 0}
+.gh i{aspect-ratio:1;border-radius:2px;background:#1a2433}
+.gh i.l1{background:#0e4b3f}.gh i.l2{background:#12806a}.gh i.l3{background:#1fb896}.gh i.l4{background:#2bd9b4}
+.fc{display:flex;gap:10px;overflow:hidden;margin-top:8px}.fc>div{flex:1;text-align:center;font-size:13px;min-width:44px}
+.fc b{display:block;font-weight:500;font-size:15px}
+.lab{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.lab>div{display:flex;align-items:center;gap:8px;font-size:14px}
+.lab i{width:10px;height:10px;border-radius:50%;background:var(--ok);flex:none}.lab i.dn{background:var(--bad)}
+#tmr .big{font-variant-numeric:tabular-nums}
+#tmr.done .big{color:var(--warn);animation:bl 1s steps(2) infinite}@keyframes bl{50%{opacity:.25}}
 .pr{margin:8px 0 14px}.pr:last-child{margin-bottom:0}
 .pr .n{display:flex;justify-content:space-between;gap:8px}
 .st{font-size:12px;padding:1px 8px;border-radius:99px;background:#1d2736;color:var(--dim)}
@@ -69,21 +83,33 @@ body.stale #grid{opacity:.35}
   <span id="badge" class="off">connecting…</span>
   <div id="wx" class="hidden"></div>
 </header>
+<div id="login" class="card hidden" style="max-width:360px;margin:40px auto">
+  <h2>Desk Hub</h2><div class="dim" id="lmsg" style="margin-bottom:10px">Enter the code</div>
+  <form id="lform" style="display:flex;gap:8px"><input id="lcode" type="password" autocomplete="off" inputmode="text" style="flex:1;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:#0b111b;color:var(--text)"><button>Open</button></form>
+</div>
 <div id="alert"></div>
 <div id="grid">
-  <section class="card hidden" id="c-ai"><h2>Claude Code</h2><div id="ai"></div></section>
-  <section class="card hidden" id="c-stats"><h2>PC</h2><div id="stats"></div></section>
-  <section class="card hidden" id="c-media"><h2>Now playing</h2><div id="media"></div></section>
-  <section class="card hidden" id="c-events"><h2>Calendar</h2><div id="events"></div></section>
-  <section class="card hidden" id="c-printer"><h2>3D printers</h2><div id="printer"></div></section>
-  <section class="card hidden" id="c-steam"><h2>Games</h2><div id="steam"></div></section>
+  <section class="card hidden pc" id="c-ai"><h2>Claude Code</h2><div id="ai"></div></section>
+  <section class="card hidden pc" id="c-stats"><h2>PC</h2><div id="stats"></div></section>
+  <section class="card hidden pc" id="c-media"><h2>Now playing</h2><div id="media"></div></section>
+  <section class="card hidden pc" id="c-events"><h2>Calendar</h2><div id="events"></div></section>
+  <section class="card hidden pc" id="c-printer"><h2>3D printers</h2><div id="printer"></div></section>
+  <section class="card hidden pc" id="c-steam"><h2>Games</h2><div id="steam"></div></section>
   <section class="card hidden" id="c-net"><h2>Internet</h2><div id="net"></div></section>
-  <section class="card hidden" id="c-tiles"><h2>Shortcuts</h2><div id="tiles" class="tiles"></div></section>
+  <section class="card hidden pc" id="c-gh"><h2>GitHub</h2><div id="gh"></div></section>
+  <section class="card hidden" id="c-fc"><h2>Weather</h2><div id="fc"></div></section>
+  <section class="card" id="c-tmr"><h2>Timer</h2><div id="tmr"></div></section>
+  <section class="card hidden" id="c-lab"><h2>Lab status</h2><div id="lab" class="lab"></div></section>
+  <section class="card hidden pc" id="c-tiles"><h2>Shortcuts</h2><div id="tiles" class="tiles"></div></section>
 </div>
 <script>
 "use strict";
 const Q = new URLSearchParams(location.search);
-const TOKEN = Q.get("token") || "";
+function store(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
+function load(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
+let TOKEN = Q.get("token") || load("deskhub-code");
+if (Q.get("token")) { store("deskhub-code", Q.get("token")); history.replaceState(null, "", location.pathname); }
+let PLACE = {lat: Q.get("lat"), lon: Q.get("lon"), unit: Q.get("unit")};
 const $ = id => document.getElementById(id);
 const S = {};            // latest message per type
 const ART = {media: null, steam: {}};
@@ -134,38 +160,60 @@ const WX = {0: "Clear", 1: "Mostly clear", 2: "Partly cloudy", 3: "Overcast", 45
   61: "Rain", 63: "Rain", 65: "Heavy rain", 71: "Snow", 73: "Snow", 75: "Heavy snow", 80: "Showers", 81: "Showers", 82: "Downpour",
   95: "Thunderstorm", 96: "Thunderstorm", 99: "Thunderstorm"};
 async function weather() {
-  const lat = Q.get("lat"), lon = Q.get("lon");
-  if (!lat || !lon) return;
+  const lat = PLACE.lat, lon = PLACE.lon;
+  if (lat === null || lat === undefined || lat === "" || lon === null || lon === undefined || lon === "") return;
   try {
-    const unit = Q.get("unit") === "c" ? "celsius" : "fahrenheit";
-    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min&temperature_unit=${unit}&timezone=auto&forecast_days=1`);
+    const unit = PLACE.unit === "c" ? "celsius" : "fahrenheit";
+    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=${unit}&timezone=auto&forecast_days=6`);
     const j = await r.json();
     const sym = unit === "celsius" ? "°C" : "°F";
     $("wx").replaceChildren(h("b", {}, Math.round(j.current.temperature_2m) + sym), h("div", {},
       (WX[j.current.weather_code] || "") + " · " + Math.round(j.daily.temperature_2m_max[0]) + "° / " + Math.round(j.daily.temperature_2m_min[0]) + "°"));
     show("wx", true);
-  } catch (e) { /* offline: keep what is shown */ }
+    const now = Date.now(), hrs = [];
+    for (let i = 0; i < j.hourly.time.length && hrs.length < 8; i++) {
+      const t = new Date(j.hourly.time[i]);
+      if (t.getTime() > now - 1800000 && t.getHours() % 2 === 0) hrs.push([t, j.hourly.temperature_2m[i], j.hourly.weather_code[i]]);
+    }
+    const col = (a, b, c) => h("div", {}, h("div", {class: "dim"}, a), h("b", {}, b), h("div", {class: "dim"}, c));
+    show("c-fc", true);
+    put("fc", h("div", {class: "fc"}, hrs.map(([t, v, c]) => col(t.toLocaleTimeString([], {hour: "numeric"}), Math.round(v) + "°", WX[c] || ""))),
+      h("div", {class: "fc", style: "margin-top:14px"}, j.daily.time.slice(1, 6).map((d, i) => col(
+        new Date(d + "T12:00").toLocaleDateString([], {weekday: "short"}),
+        Math.round(j.daily.temperature_2m_max[i + 1]) + "° / " + Math.round(j.daily.temperature_2m_min[i + 1]) + "°",
+        WX[j.daily.weather_code[i + 1]] || ""))));
+  } catch (e) { console.warn("weather failed:", e); }
 }
-weather(); setInterval(weather, 15 * 60 * 1000);
+weather();
+setInterval(weather, 15 * 60 * 1000);
 
 // ---- cards ----------------------------------------------------------------
-function renderAi() {
-  const a = S.ai || S.claude;
-  if (!a) return show("c-ai", false);
-  show("c-ai", true);
+function aiSection(a, name) {
   const L = a.limits || {}, out = [];
+  if (name) out.push(h("div", {style: "font-weight:600;margin-bottom:4px"}, name));
   for (const [k, label] of [["five_hour", "5 hour"], ["seven_day", "Weekly"]]) {
     if (L[k]) out.push(line(label, L[k].pct, Math.round(L[k].pct) + "% · " + until(L[k].reset), 70, 90));
   }
   const blk = a.block || {};
-  if (!out.length && blk.active) out.push(h("div", {class: "dim sm"}, "Block resets in " + until(blk.reset) + " · " + fmtN(blk.tokens) + " tokens"));
+  if (!out.length || (name && !L.five_hour && !L.seven_day)) {
+    if (blk.active) out.push(h("div", {class: "dim sm"}, "Block resets in " + until(blk.reset) + " · " + fmtN(blk.tokens) + " tokens"));
+  }
   const t = a.today || {};
   out.push(h("div", {class: "row"}, h("span", {class: "big"}, fmtN(t.tokens || 0)), h("span", {class: "dim sm"}, "tokens today · " + (t.messages || 0) + " messages")));
   const days = a.days || [], mx = Math.max(1, ...days);
   if (days.length) out.push(h("div", {class: "days"}, days.map(v => h("i", {style: `height:${Math.max(3, v / mx * 100)}%`}))));
-  const models = Object.entries(a.models || {}).sort((x, y) => y[1] - x[1]);
+  // models arrives as a list of {name, tokens}
+  const models = (Array.isArray(a.models) ? a.models.map(m => [m.name, m.tokens]) : Object.entries(a.models || {})).sort((x, y) => y[1] - x[1]);
   if (models.length) out.push(h("div", {class: "dim sm", style: "margin-top:8px"}, models.map(([n, v]) => n + " " + fmtN(v)).join(" · ")));
-  put("ai", out);
+  return h("div", {class: "acct"}, out);
+}
+function renderAi() {
+  const multi = S.ai_accounts && S.ai_accounts.accounts && S.ai_accounts.accounts.length > 1 ? S.ai_accounts.accounts : null;
+  const a = S.ai || S.claude;
+  if (!multi && !a) return show("c-ai", false);
+  show("c-ai", true);
+  $("c-ai").classList.toggle("wide", !!multi);
+  put("ai", multi ? h("div", {class: "accts"}, multi.map(x => aiSection(x, x.name))) : aiSection(a, null));
 }
 function renderStats() {
   const s = S.stats;
@@ -200,7 +248,8 @@ function renderMediaBar() {
   row.replaceChildren(h("span", {class: "dim sm"}, mmss(pos)), bar(m.dur ? pos / m.dur * 100 : 0, 101, 101), h("span", {class: "dim sm"}, mmss(m.dur || 0)));
 }
 function renderEvents() {
-  const ev = (S.events && S.events.events) || [];
+  if (!S.events) return show("c-events", false);
+  const ev = S.events.events || [];
   show("c-events", true);
   if (!ev.length) return put("events", h("div", {class: "dim"}, "No events in the next " + ((S.events && S.events.days) || 7) + " days"));
   const out = []; let last = "";
@@ -277,6 +326,45 @@ function renderAlert() {
     controls ? h("div", {class: "ctl"}, h("button", {onclick: () => send({type: "alert_action", id: a.id, action: "focus"})}, "Show on PC"),
       h("button", {onclick: () => send({type: "alert_action", id: a.id, action: "dismiss"})}, "Dismiss")) : null);
 }
+function renderGh() {
+  const g = S.github;
+  if (!g) return show("c-gh", false);
+  show("c-gh", true);
+  const cells = [];
+  for (let i = 0; i < g.start_wday; i++) cells.push(h("i", {style: "background:none"}));
+  for (const c of g.levels) cells.push(h("i", {class: "l" + c}));
+  const stat = (n, l) => h("div", {}, h("div", {class: "big", style: "font-size:24px"}, n), h("div", {class: "dim sm"}, l));
+  put("gh", h("div", {class: "dim sm"}, g.login + " · " + g.total + " contributions in the last year"), h("div", {class: "gh"}, cells),
+    h("div", {style: "display:flex;gap:18px;flex-wrap:wrap"}, stat(g.today, "today"), stat(g.week + " / " + g.last_week, "this week / last"),
+      stat(g.streak, "day streak"), stat(g.longest, "longest")));
+}
+function renderLab() {
+  const c = S._checks;
+  if (!c || !c.items.length) return show("c-lab", false);
+  show("c-lab", true);
+  put("lab", c.items.map(x => h("div", {}, h("i", {class: x.up ? "" : "dn"}), x.name,
+    x.up ? h("span", {class: "dim sm"}, x.ms + " ms") : h("span", {class: "sm", style: "color:var(--bad)"}, "down"))));
+}
+const TM = {left: 0, running: false, end: 0, total: 0, done: false};
+function tmrRender() {
+  if (TM.running) { TM.left = Math.max(0, (TM.end - Date.now()) / 1000); if (TM.left <= 0) { TM.running = false; TM.done = true; } }
+  const box = $("tmr");
+  box.className = TM.done ? "done" : "";
+  const preset = m => h("button", {onclick: () => { TM.total = m * 60; TM.left = TM.total; TM.end = Date.now() + TM.total * 1000; TM.running = true; TM.done = false; tmrRender(); }}, m + "m");
+  const toggle = () => { if (TM.running) TM.running = false; else if (TM.left) { TM.end = Date.now() + TM.left * 1000; TM.running = true; } tmrRender(); };
+  const reset = () => { TM.running = false; TM.done = false; TM.left = 0; TM.total = 0; tmrRender(); };
+  box.replaceChildren(h("div", {class: "big"}, TM.done ? "Time's up" : mmss(TM.left || 0)),
+    h("div", {class: "bar", style: "margin:8px 0"}, h("i", {style: `width:${TM.total ? (TM.total - (TM.left || 0)) / TM.total * 100 : 0}%`})),
+    h("div", {class: "ctl"}, [1, 5, 10, 15, 25, 45].map(preset),
+      TM.running || TM.left ? h("button", {onclick: toggle}, TM.running ? "Pause" : "Resume") : null,
+      TM.total ? h("button", {onclick: reset}, "Reset") : null));
+}
+setInterval(() => { if (TM.running) tmrRender(); }, 500);
+tmrRender();
+// Dim at night (10 pm to 6 am) so a desk display is not a lamp.
+function nightCheck() { const hr = new Date().getHours(); document.body.classList.toggle("night", hr >= 22 || hr < 6); }
+setInterval(nightCheck, 60000);
+nightCheck();
 function renderStatus() {
   const b = $("badge");
   b.textContent = !ws || ws.readyState !== 1 ? "reconnecting…" : companion ? "PC connected" : "PC offline";
@@ -284,17 +372,34 @@ function renderStatus() {
   document.body.classList.toggle("stale", !companion || !!(S.pc_power && S.pc_power.asleep));
 }
 const RENDER = {ai: renderAi, claude: renderAi, stats: renderStats, media: renderMedia, events: renderEvents, printer: renderPrinters,
-  steam: renderSteam, net: renderNet, tiles: () => { renderTiles(); }, tile_state: renderTiles, alert: renderAlert, pc_power: renderStatus};
-function renderAll() { renderAi(); renderStats(); renderMedia(); renderEvents(); renderPrinters(); renderSteam(); renderNet(); renderTiles(); renderAlert(); renderStatus(); }
+  steam: renderSteam, net: renderNet, ai_accounts: renderAi, github: renderGh, _checks: renderLab, tiles: () => { renderTiles(); }, tile_state: renderTiles, alert: renderAlert, pc_power: renderStatus};
+function renderAll() { renderAi(); renderStats(); renderMedia(); renderEvents(); renderPrinters(); renderSteam(); renderNet(); renderTiles(); renderAlert(); renderGh(); renderLab(); renderStatus(); }
 
 // ---- connection --------------------------------------------------------------
+let opened = false, fails = 0;
+function askCode(msg) {
+  show("login", true); show("grid", false); $("lmsg").textContent = msg || "Enter the code";
+  $("badge").textContent = "locked"; $("lcode").focus();
+}
+$("lform").onsubmit = e => {
+  e.preventDefault();
+  const v = $("lcode").value.trim(); if (!v) return;
+  TOKEN = v; store("deskhub-code", v); $("lcode").value = ""; fails = 0;
+  show("login", false); show("grid", true); connect();
+};
 function connect() {
+  opened = false;
   ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/view?token=" + encodeURIComponent(TOKEN));
-  ws.onopen = () => { delay = 1000; renderStatus(); };
-  ws.onclose = () => { renderStatus(); setTimeout(connect, delay); delay = Math.min(delay * 2, 15000); };
+  ws.onopen = () => { opened = true; fails = 0; delay = 1000; renderStatus(); };
+  ws.onclose = () => {
+    renderStatus();
+    if (!opened && ++fails >= 3) { store("deskhub-code", null); TOKEN = ""; return askCode("That code didn't work. Try again."); }
+    setTimeout(connect, delay); delay = Math.min(delay * 2, 15000);
+  };
   ws.onmessage = ev => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-    if (m.type === "_status") { companion = m.companion; controls = m.controls; if (!companion) for (const k in S) delete S[k]; renderAll(); return; }
+    if (m.type === "_status") { companion = m.companion; controls = m.controls;
+      if (m.lat !== undefined && (PLACE.lat !== m.lat || PLACE.lon !== m.lon)) { PLACE = {lat: m.lat, lon: m.lon, unit: m.unit}; weather(); } if (!companion) for (const k in S) if (k[0] !== "_") delete S[k]; renderAll(); return; }
     if (m.type === "_art") {
       const url = "data:image/png;base64," + m.png;
       if (m.kind === "media") { ART.media = url; renderMedia(); } else { ART.steam[m.appid + ":" + m.k] = url; renderSteam(); }
@@ -304,8 +409,7 @@ function connect() {
     (RENDER[m.type] || (() => {}))();
   };
 }
-if (!TOKEN) $("badge").textContent = "add ?token=… to the address";
-else connect();
+if (!TOKEN) askCode(); else connect();
 </script>
 </body>
 </html>
