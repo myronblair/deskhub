@@ -72,6 +72,13 @@ body.night{filter:brightness(.4)}
 .feed .s.ok{background:#0f3a2d;color:var(--ok)}.feed .s.bad{background:#4a1b1b;color:var(--bad)}.feed .s.warn{background:#4a3a14;color:var(--warn)}
 .nasd{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.nasd span{font-size:12px;padding:2px 8px;border-radius:8px;background:#1d2736;color:var(--dim)}
 .nasd span.warn{color:var(--warn)}.nasd span.bad{color:var(--bad)}
+#banner{display:none;margin-bottom:12px}
+.bn{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;border-radius:12px;margin-bottom:6px;border:1px solid}
+.bn.crit{background:#3a1515;border-color:var(--bad)}.bn.warn{background:#3a2a0d;border-color:var(--warn)}
+.bn b{font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+.bn.crit b{color:var(--bad)}.bn.warn b{color:var(--warn)}
+.bn button{margin-left:auto;padding:6px 12px;min-width:0;font-size:13px}
+body.alerting .bn.crit{animation:pulse 2s ease-in-out infinite}@keyframes pulse{50%{border-color:#ffb0b0}}
 #tmr .big{font-variant-numeric:tabular-nums}
 #tmr.done .big{color:var(--warn);animation:bl 1s steps(2) infinite}@keyframes bl{50%{opacity:.25}}
 .pr{margin:8px 0 14px}.pr:last-child{margin-bottom:0}
@@ -90,6 +97,7 @@ body.night{filter:brightness(.4)}
   <span id="badge" class="off">connecting…</span>
   <div id="wx" class="hidden"></div>
 </header>
+<div id="banner"></div>
 <div id="login" class="card hidden" style="max-width:360px;margin:40px auto">
   <h2>The Hub</h2><div class="dim" id="lmsg" style="margin-bottom:10px">Enter the code</div>
   <form id="lform" style="display:flex;gap:8px"><input id="lcode" type="password" autocomplete="off" inputmode="text" style="flex:1;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:#0b111b;color:var(--text)"><button>Open</button></form>
@@ -372,8 +380,8 @@ function tmrRender() {
 }
 setInterval(() => { if (TM.running) tmrRender(); }, 500);
 tmrRender();
-// Dim at night (10 pm to 6 am) so a desk display is not a lamp.
-function nightCheck() { const hr = new Date().getHours(); document.body.classList.toggle("night", hr >= 22 || hr < 6); }
+// Dim at night (10 pm to 6 am) so a desk display is not a lamp, unless something critical is showing.
+function nightCheck() { const hr = new Date().getHours(); document.body.classList.toggle("night", (hr >= 22 || hr < 6) && !document.body.classList.contains("alerting")); }
 setInterval(nightCheck, 60000);
 nightCheck();
 function fmtUp(sec) { const d = Math.floor(sec / 86400), hr = Math.floor(sec % 86400 / 3600); return d ? d + "d " + hr + "h" : hr + "h " + Math.floor(sec % 3600 / 60) + "m"; }
@@ -416,6 +424,41 @@ function renderJarvis() {
     h("div", {class: "b"}, h("div", {}, a.title), a.detail ? h("div", {class: "dim sm"}, a.detail) : null),
     h("span", {class: "s " + (a.level === "crit" ? "bad" : a.level === "warn" ? "warn" : "")}, a.resolved ? "resolved" : a.level)), "No alerts");
 }
+// ---- alert banner: what needs attention without anyone looking at a card ----
+const DISMISSED = (() => { try { return new Set(JSON.parse(localStorage.getItem("hub-dismissed") || "[]")); } catch (e) { return new Set(); } })();
+function alertItems() {
+  const out = [];
+  const j = S._jarvis;
+  if (j && j.items) for (const a of j.items) if (!a.resolved && a.level === "crit") out.push({key: "jarvis:" + a.t + ":" + a.title, level: "crit", where: "JARVIS", text: a.title, sub: a.detail});
+  const d = S._doors;
+  if (d && d.items) for (const e of d.items) if (e.result === "denied" && Date.now() / 1000 - e.t < 1800) out.push({key: "door:" + e.t + ":" + e.who, level: "crit", where: "Door", text: "Access denied: " + (e.who || "unknown card"), sub: e.door + " · " + ago(e.t) + " ago"});
+  const n = S._nas;
+  if (n && n.offline) out.push({key: "nas:offline", level: "warn", where: "NAS", text: "NAS not answering", sub: ""});
+  else if (n) {
+    const raids = (n.raids || []).filter(r => r.state !== "ok" && r.state !== "scrubbing"), disks = (n.disks || []).filter(x => x.state === "bad");
+    if (!n.ok || raids.length || disks.length) out.push({key: "nas:" + [n.ok, raids.map(r => r.name + r.state), disks.map(x => x.name)].join("|"), level: "crit", where: "NAS", text: "NAS needs attention",
+      sub: [...raids.map(r => r.name + " " + r.state), ...disks.map(x => x.name + " failing")].join(", ")});
+  }
+  const c = S._checks;
+  if (c && c.items) for (const x of c.items) if (!x.up) out.push({key: "lab:" + x.name, level: "warn", where: "Lab", text: x.name + " is down", sub: ""});
+  if (S.net && S.net.online === false) out.push({key: "net:offline", level: "crit", where: "Internet", text: "Internet is down", sub: ""});
+  for (const p of (S.printer && S.printer.printers) || []) if (p.online && p.error) out.push({key: "printer:" + p.name + p.error, level: "warn", where: "Printer", text: p.name + ": " + p.error, sub: ""});
+  return out;
+}
+function renderBanner() {
+  const items = alertItems(), active = new Set(items.map(i => i.key));
+  try { localStorage.setItem("hub-dismissed", JSON.stringify([...DISMISSED].filter(k => active.has(k)))); } catch (e) {}
+  const shown = items.filter(i => !DISMISSED.has(i.key)), box = $("banner");
+  document.body.classList.toggle("alerting", shown.some(i => i.level === "crit"));
+  nightCheck();
+  if (!shown.length) { box.style.display = "none"; box.replaceChildren(); return; }
+  box.style.display = "block";
+  const rows = shown.slice(0, 4).map(i => h("div", {class: "bn " + i.level}, h("b", {}, i.where), i.text, i.sub ? h("span", {class: "dim sm"}, " · " + i.sub) : null,
+    h("button", {onclick: () => { DISMISSED.add(i.key); renderBanner(); }}, "Dismiss")));
+  if (shown.length > 4) rows.push(h("div", {class: "dim sm"}, "+" + (shown.length - 4) + " more"));
+  box.replaceChildren(...rows);
+}
+setInterval(renderBanner, 30000);
 function renderStatus() {
   const b = $("badge");
   b.textContent = !ws || ws.readyState !== 1 ? "reconnecting…" : companion ? "PC connected" : "PC offline";
@@ -424,7 +467,7 @@ function renderStatus() {
 }
 const RENDER = {ai: renderAi, claude: renderAi, stats: renderStats, media: renderMedia, events: renderEvents, printer: renderPrinters,
   steam: renderSteam, net: renderNet, ai_accounts: renderAi, github: renderGh, _checks: renderLab, _nas: renderNas, _doors: renderDoors, _calls: renderCalls, _jarvis: renderJarvis, tiles: () => { renderTiles(); }, tile_state: renderTiles, alert: renderAlert, pc_power: renderStatus};
-function renderAll() { renderAi(); renderStats(); renderMedia(); renderEvents(); renderPrinters(); renderSteam(); renderNet(); renderTiles(); renderAlert(); renderGh(); renderLab(); renderNas(); renderDoors(); renderCalls(); renderJarvis(); renderStatus(); }
+function renderAll() { renderAi(); renderStats(); renderMedia(); renderEvents(); renderPrinters(); renderSteam(); renderNet(); renderTiles(); renderAlert(); renderGh(); renderLab(); renderNas(); renderDoors(); renderCalls(); renderJarvis(); renderStatus(); renderBanner(); }
 
 // ---- connection --------------------------------------------------------------
 let opened = false, fails = 0;
@@ -458,6 +501,7 @@ function connect() {
     }
     S[m.type] = m;
     (RENDER[m.type] || (() => {}))();
+    renderBanner();
   };
 }
 if (!TOKEN) askCode(); else connect();
