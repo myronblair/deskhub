@@ -17,7 +17,9 @@ Settings come from the environment:
                       {"nas": {"host": "10.0.0.9", "conf_dir": "/etc/deskhub-snmp"},
                        "doors": {"url": "http://...", "token": "..."},
                        "calls": {"url": "...", "token": "..."},
-                       "jarvis": {"url": "...", "token": "..."}}
+                       "jarvis": {"url": "...", "token": "..."},
+                       "ha": {"url": "http://10.0.0.7:8123", "token": "<long-lived access token>",
+                              "toggle": ["light.porch"], "watch": ["binary_sensor.shed_door"]}}
     DESKHUB_CHECKS    hosts to watch, e.g. "Proxmox=10.0.0.5:8006,NAS=10.0.0.9:5001" (shown as Lab status)
     DESKHUB_LAT, DESKHUB_LON, DESKHUB_UNIT   weather place for the page (unit: f or c)
 """
@@ -230,6 +232,24 @@ def clean_feed(kind: str, data: dict) -> dict:
     return {"type": "_" + kind, "items": out}
 
 
+HA_TOGGLE_DOMAINS = {"light", "switch", "fan", "input_boolean"}   # never locks, covers, alarms or buttons
+
+
+def ha_message(states: list, toggle: list, watch: list) -> dict:
+    """The page's Home card from Home Assistant's /api/states, limited to the configured entities."""
+    by_id = {x.get("entity_id"): x for x in states if isinstance(x, dict)}
+    items = []
+    for kind, ids in (("toggle", toggle), ("sensor", watch)):
+        for eid in ids:
+            x = by_id.get(eid)
+            if not x:
+                continue
+            attrs = x.get("attributes") or {}
+            items.append({"id": eid, "kind": kind, "name": _s(attrs.get("friendly_name") or eid, 60),
+                          "state": _s(x.get("state"), 20), "dc": _s(attrs.get("device_class"), 20)})
+    return {"type": "_ha", "items": items}
+
+
 class Board:
     def __init__(self, token: str, controls: bool, pin: str = "", place: dict | None = None,
                  checks: list | None = None):
@@ -318,13 +338,17 @@ class Board:
             for text in list(self.extra.values()) + list(self.latest.values()) + list(self.art.values()):
                 await ws.send_str(text)
             async for msg in ws:
-                if msg.type != WSMsgType.TEXT or not self.controls or self.companion is None:
+                if msg.type != WSMsgType.TEXT or not self.controls:
                     continue
                 try:
                     cmd = json.loads(msg.data)
                 except ValueError:
                     continue
-                if isinstance(cmd, dict) and cmd.get("type") in FROM_PAGE:
+                if not isinstance(cmd, dict):
+                    continue
+                if cmd.get("type") == "ha_toggle":
+                    await self.ha_toggle(str(cmd.get("id", "")))
+                elif cmd.get("type") in FROM_PAGE and self.companion is not None:
                     await self.companion.send_str(json.dumps(cmd, separators=(",", ":")))
         finally:
             self.viewers.discard(ws)
@@ -387,12 +411,49 @@ class Board:
                     await self.publish({"type": "_" + kind, "offline": True})
                 await asyncio.sleep(10)
 
+    async def ha_fetch(self, sess, cfg: dict) -> dict:
+        async with sess.get(cfg["url"].rstrip("/") + "/api/states", headers=self.ha_headers) as r:
+            r.raise_for_status()
+            return ha_message(await r.json(content_type=None), cfg.get("toggle", []), cfg.get("watch", []))
+
+    async def ha_toggle(self, entity: str):
+        """Toggle one Home Assistant entity, but only if it is on the configured list and a safe kind."""
+        cfg = self.feeds.get("ha") or {}
+        if entity not in cfg.get("toggle", []) or entity.split(".", 1)[0] not in HA_TOGGLE_DOMAINS:
+            log.warning("ha_toggle refused: %r", entity[:60])
+            return
+        domain = entity.split(".", 1)[0]
+        try:
+            async with self.ha_sess.post(cfg["url"].rstrip("/") + f"/api/services/{domain}/toggle", headers=self.ha_headers,
+                                         json={"entity_id": entity}) as r:
+                r.raise_for_status()
+            await asyncio.sleep(0.6)
+            await self.publish(await self.ha_fetch(self.ha_sess, cfg))
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+            log.warning("ha toggle failed: %s", e)
+
+    async def ha_loop(self, cfg: dict):
+        self.ha_headers = {"Authorization": "Bearer " + str(cfg.get("token", ""))}
+        self.ha_sess = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        try:
+            while True:
+                try:
+                    await self.publish(await self.ha_fetch(self.ha_sess, cfg))
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError) as e:
+                    log.warning("ha feed: %s", e)
+                    await self.publish({"type": "_ha", "offline": True})
+                await asyncio.sleep(5)
+        finally:
+            await self.ha_sess.close()
+
     async def start_checks(self, app):
         tasks = []
         if self.checks:
             tasks.append(asyncio.create_task(self.check_loop()))
         if self.feeds.get("nas"):
             tasks.append(asyncio.create_task(self.nas_loop(self.feeds["nas"])))
+        if self.feeds.get("ha"):
+            tasks.append(asyncio.create_task(self.ha_loop(self.feeds["ha"])))
         for kind in ("doors", "calls", "jarvis"):
             if self.feeds.get(kind):
                 tasks.append(asyncio.create_task(self.http_feed_loop(kind, self.feeds[kind])))

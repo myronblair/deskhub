@@ -72,6 +72,11 @@ body.night{filter:brightness(.4)}
 .feed .s.ok{background:#0f3a2d;color:var(--ok)}.feed .s.bad{background:#4a1b1b;color:var(--bad)}.feed .s.warn{background:#4a3a14;color:var(--warn)}
 .nasd{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.nasd span{font-size:12px;padding:2px 8px;border-radius:8px;background:#1d2736;color:var(--dim)}
 .nasd span.warn{color:var(--warn)}.nasd span.bad{color:var(--bad)}
+.hatiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.hatiles button{padding:14px 8px;font-size:14px;line-height:1.2}
+.hatiles button .st{display:block;font-size:11px;opacity:.7;margin-top:2px}
+.hasens{margin-top:12px}.hasens>div{display:flex;justify-content:space-between;gap:8px;margin:5px 0;font-size:14px}
+.hasens .open{color:var(--warn)}.hasens .closed{color:var(--ok)}
 #banner{display:none;margin-bottom:12px}
 .bn{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;border-radius:12px;margin-bottom:6px;border:1px solid}
 .bn.crit{background:#3a1515;border-color:var(--bad)}.bn.warn{background:#3a2a0d;border-color:var(--warn)}
@@ -114,6 +119,7 @@ body.alerting .bn.crit{animation:pulse 2s ease-in-out infinite}@keyframes pulse{
   <section class="card hidden pc" id="c-gh"><h2>GitHub</h2><div id="gh"></div></section>
   <section class="card hidden" id="c-fc"><h2>Weather</h2><div id="fc"></div></section>
   <section class="card" id="c-tmr"><h2>Timer</h2><div id="tmr"></div></section>
+  <section class="card hidden" id="c-ha"><h2>Home</h2><div id="ha"></div></section>
   <section class="card hidden" id="c-nas"><h2>NAS</h2><div id="nas"></div></section>
   <section class="card hidden" id="c-doors"><h2>Door access</h2><div id="doors"></div></section>
   <section class="card hidden" id="c-calls"><h2>Phone calls</h2><div id="calls"></div></section>
@@ -459,6 +465,22 @@ function renderBanner() {
   box.replaceChildren(...rows);
 }
 setInterval(renderBanner, 30000);
+function renderHa() {
+  const f = S._ha;
+  if (!f) return show("c-ha", false);
+  show("c-ha", true);
+  if (f.offline) return put("ha", h("div", {class: "sm", style: "color:var(--bad)"}, "Home Assistant not answering"));
+  const tg = f.items.filter(i => i.kind === "toggle"), se = f.items.filter(i => i.kind === "sensor");
+  const out = [];
+  $("c-ha").classList.toggle("wide", tg.length > 8);
+  if (tg.length) out.push(h("div", {class: "hatiles"}, tg.map(i => h("button", {class: i.state === "on" ? "on" : "", disabled: !controls || null,
+    onclick: () => send({type: "ha_toggle", id: i.id})}, i.name.replace(/ (Floodlight|Lights?)$/i, ""), h("span", {class: "st"}, i.state === "on" ? "on" : i.state === "off" ? "off" : i.state)))));
+  if (se.length) out.push(h("div", {class: "hasens"}, se.map(i => {
+    const open = i.state === "on", label = i.dc === "window" || i.dc === "door" || i.dc === "garage_door" ? (open ? "Open" : "Closed") : i.state;
+    return h("div", {}, h("span", {}, i.name.replace(/ (Door|Window)$/i, "")), h("span", {class: open ? "open" : "closed"}, label));
+  })));
+  put("ha", out);
+}
 function renderStatus() {
   const b = $("badge");
   b.textContent = !ws || ws.readyState !== 1 ? "reconnecting…" : companion ? "PC connected" : "PC offline";
@@ -466,8 +488,8 @@ function renderStatus() {
   document.body.classList.toggle("stale", !companion || !!(S.pc_power && S.pc_power.asleep));
 }
 const RENDER = {ai: renderAi, claude: renderAi, stats: renderStats, media: renderMedia, events: renderEvents, printer: renderPrinters,
-  steam: renderSteam, net: renderNet, ai_accounts: renderAi, github: renderGh, _checks: renderLab, _nas: renderNas, _doors: renderDoors, _calls: renderCalls, _jarvis: renderJarvis, tiles: () => { renderTiles(); }, tile_state: renderTiles, alert: renderAlert, pc_power: renderStatus};
-function renderAll() { renderAi(); renderStats(); renderMedia(); renderEvents(); renderPrinters(); renderSteam(); renderNet(); renderTiles(); renderAlert(); renderGh(); renderLab(); renderNas(); renderDoors(); renderCalls(); renderJarvis(); renderStatus(); renderBanner(); }
+  steam: renderSteam, net: renderNet, ai_accounts: renderAi, github: renderGh, _checks: renderLab, _ha: renderHa, _nas: renderNas, _doors: renderDoors, _calls: renderCalls, _jarvis: renderJarvis, tiles: () => { renderTiles(); }, tile_state: renderTiles, alert: renderAlert, pc_power: renderStatus};
+function renderAll() { renderAi(); renderStats(); renderMedia(); renderEvents(); renderPrinters(); renderSteam(); renderNet(); renderTiles(); renderAlert(); renderGh(); renderLab(); renderHa(); renderNas(); renderDoors(); renderCalls(); renderJarvis(); renderStatus(); renderBanner(); }
 
 // ---- connection --------------------------------------------------------------
 let opened = false, fails = 0;

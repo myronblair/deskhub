@@ -74,3 +74,15 @@ Put a JSON file at `/etc/deskhub-feeds.json` (or set `DESKHUB_FEEDS`) and restar
 
 - **NAS** (Synology): read with SNMP, which only reads. Install `snmp` on the server, enable SNMPv3 on the NAS, and put the user in `conf_dir/snmp.conf` (`defVersion 3`, `defSecurityLevel authPriv`, `defSecurityName`, `defAuthType SHA`, `defAuthPassphrase`, `defPrivType AES`, `defPrivPassphrase`).
 - **doors, calls, jarvis** (examples in `feeds/`): the server fetches the URL every 10 seconds with `Authorization: Bearer <token>`. The reply is JSON: `{"events": [{"t": epoch, "door", "who", "result": "granted|denied"}]}`, `{"calls": [{"t", "dir": "in|out|missed", "from", "to", "name", "secs"}]}` or `{"alerts": [{"t", "level": "info|warn|crit", "title", "detail", "resolved"}]}`. Only these fields are kept, trimmed to length.
+
+## Home Assistant (lights and switches)
+
+Add an `ha` entry to `/etc/deskhub-feeds.json`. The Hub polls Home Assistant every 5 seconds, and tapping a button toggles that entity.
+
+    "ha": {"url": "http://HOME-ASSISTANT:8123", "token": "<long-lived access token>",
+           "toggle": ["light.porch", "switch.desk_lamp"],
+           "watch": ["binary_sensor.shed_door"]}
+
+- `toggle`: entities with a button. Only `light`, `switch`, `fan` and `input_boolean` can ever be toggled, whatever the list says, so a lock, cover or alarm entity is refused. The server also refuses anything not on this list.
+- `watch`: entities shown as read-only status (open or closed for door sensors).
+- Create the token in Home Assistant under your profile, Security, Long-lived access tokens, and name it "The Hub" so you can revoke it. A Home Assistant token is not limited to the entities listed here; the limit is enforced by The Hub, so keep the token on the server only.
